@@ -21,7 +21,19 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # Без CLOUDFLARE_API_TOKEN шаг деплоя пропускается, а не падает.
+      - name: Check Cloudflare credentials
+        id: creds
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN не задан — деплой Worker пропущен. Воркер можно развернуть локально: wrangler deploy -c wrangler.toml --no-autoconfig"
+          fi
+
       - name: Deploy Worker
+        if: steps.creds.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
