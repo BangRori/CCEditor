@@ -13,6 +13,8 @@ on:
         "src/**/*.ts",
         "src/**/*.tsx",
         "src/**/*.sh",
+        ".github/workflows/deploy.yml",
+        "pnpm-workspace.yaml",
       ]
   workflow_dispatch: {}
 
@@ -28,14 +30,14 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v7
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - name: Install pnpm
+        run: npm install -g pnpm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
