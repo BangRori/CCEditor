@@ -23,12 +23,18 @@ interface TranslateButtonProps {
 // Кеш переводов в sessionStorage
 const translateCache: Record<string, string> = {};
 
+const API_KEY = import.meta.env.VITE_NVIDIA_API_KEY || '';
+  
 export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTranslate }) => {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const handleTranslate = async () => {
     if (!text || loading || text.length < 20) return;
+    if (!API_KEY) {
+      console.warn('[TranslateButton] NVIDIA API key не настроен. Добавьте секрет NVIDIA_API_KEY в GitHub.');
+      return;
+    }
 
     const cacheKey = `nv_translate_${btoa(text.substring(0, 100))}`;
     const cached = sessionStorage.getItem(cacheKey);
@@ -41,16 +47,10 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
     setError(null);
 
     try {
-      const apiKey = (window as any).__NVI_API_KEY__ || import.meta.env.VITE_NVIDIA_API_KEY;
-      if (!apiKey) {
-        console.warn('[TranslateButton] NVIDIA API key не настроен. Добавьте секрет NVIDIA_API_KEY в GitHub.');
-        return;
-      }
-
       const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': `Bearer ${API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
