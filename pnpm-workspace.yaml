@@ -1,8 +1,4 @@
-onlyBuiltDependencies:
-  - "@tailwindcss/oxide"
-  - core-js
-  - esbuild
 allowBuilds:
+  '@tailwindcss/oxide': true
+  core-js: false
   esbuild: true
-  core-js: true
-  "@tailwindcss/oxide": true
