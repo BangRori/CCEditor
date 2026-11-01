@@ -223,5 +223,20 @@
   "Plugin tools run against the current card without modifying it.": "Plugin tools run against the current card without modifying it.",
   "Load a character card first": "Load a character card first",
   "Start": "Start",
-  "A local workspace for creating, importing, and refining character cards.": "A local workspace for creating, importing, and refining character cards."
+  "A local workspace for creating, importing, and refining character cards.": "A local workspace for creating, importing, and refining character cards.",
+
+  "Translate": "Translate",
+  "Translate to Russian": "Translate to Russian",
+  "Translate Error": "Translate Error",
+  "API Key not configured": "API Key not configured",
+  "Using proxy": "Using proxy",
+  "Direct request (proxy needed for CORS)": "Direct request (proxy needed for CORS)",
+  "Request/Response Logs": "Request/Response Logs",
+  "NVIDIA Translate Debug": "NVIDIA Translate Debug",
+  "Press RU for translation...": "Press RU for translation...",
+  "Loading...": "Loading...",
+  "Translate button tooltip": "Translate selected text to Russian using NVIDIA NVI API",
+  "Add translate tool": "Add translate tool",
+  "Text is too short to translate": "Text is too short to translate",
+  "See TRANSLATE_SETUP.md for setup instructions": "See TRANSLATE_SETUP.md for setup instructions"
 }

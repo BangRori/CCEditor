@@ -233,5 +233,20 @@
   "Plugin tools run against the current card without modifying it.": "插件工具基于当前角色卡运行，不会直接修改卡片。",
   "Load a character card first": "请先加载角色卡",
   "Start": "开始",
-  "A local workspace for creating, importing, and refining character cards.": "用于创建、导入和精修角色卡的本地工作区。"
+  "A local workspace for creating, importing, and refining character cards.": "用于创建、导入和精修角色卡的本地工作区。",
+
+  "Translate": "翻译",
+  "Translate to Russian": "翻译为俄语",
+  "Translate Error": "翻译错误",
+  "API Key not configured": "API密钥未配置",
+  "Using proxy": "使用代理",
+  "Direct request (proxy needed for CORS)": "直接请求（需要代理解决CORS问题）",
+  "Request/Response Logs": "请求/响应日志",
+  "NVIDIA Translate Debug": "NVIDIA翻译调试",
+  "Press RU for translation...": "按RUSTranslate...",
+  "Loading...": "加载中...",
+  "Translate button tooltip": "使用NVIDIA NVI API将选定文本翻译为俄语",
+  "Add translate tool": "添加翻译工具",
+  "Text is too short to translate": "文本太短，无法翻译",
+  "See TRANSLATE_SETUP.md for setup instructions": "请参阅 TRANSLATE_SETUP.md 获取配置说明"
 }

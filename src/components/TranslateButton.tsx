@@ -1,96 +1,146 @@
 /**
- * Компонент кнопки перевода текста
- * Использует NVIDIA NVI API (nvidia/riva-translate-4b-instruct-v2)
- * 
- * Интеграция через Cloudflare Workers:
- * wrangler login → wrangler deploy (создаст workers/translate.js)
- * Добавь VITE_TRANSLATE_PROXY_URL=URL_вашего_воркера во Secrets
+ * Кнопка перевода текста через NVIDIA NVI API.
+ *
+ * Работает в двух режимах:
+ *  1. proxy  — POST { text } на Cloudflare Worker (нужно для GitHub Pages: нет CORS)
+ *  2. direct — прямой запрос к NVIDIA с VITE_NVIDIA_API_KEY (только локальная разработка)
+ *
+ * URL прокси берётся из (по приоритету):
+ *   localStorage["translate_proxy_url"] → VITE_TRANSLATE_PROXY_URL → встроенный дефолт
  */
 
-import * as React from 'react';
-import { Button, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent } from '@fluentui/react-components';
-import { DocumentText20Regular, Dismiss24Regular } from '@fluentui/react-icons';
+import * as React from "react";
+import {
+  Button,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogTitle,
+  DialogContent,
+} from "@fluentui/react-components";
+import { DocumentText20Regular, Dismiss24Regular } from "@fluentui/react-icons";
+import { useI18n } from "../tools/i18n";
+
+const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MODEL = "nvidia/riva-translate-4b-instruct-v2";
+
+/** Деплой воркера этого репозитория. Можно переопределить через localStorage. */
+const DEFAULT_PROXY = "https://cc-editor-translate.roxroot.workers.dev";
+
+function resolveProxyUrl(): string {
+  try {
+    const override = localStorage.getItem("translate_proxy_url");
+    if (override) return override.trim().replace(/\/+$/, "");
+  } catch {
+    /* localStorage может быть недоступен */
+  }
+  const fromEnv = (import.meta.env.VITE_TRANSLATE_PROXY_URL || "").trim();
+  if (fromEnv) return fromEnv.replace(/\/+$/, "");
+  return DEFAULT_PROXY;
+}
+
+const DIRECT_KEY = import.meta.env.VITE_NVIDIA_API_KEY || "";
 
 interface TranslateButtonProps {
   text: string;
   onTranslate: (translated: string) => void;
+  disabled?: boolean;
 }
 
-const API_KEY = import.meta.env.VITE_NVIDIA_API_KEY || '';
-const TRANSLATE_PROXY = import.meta.env.VITE_TRANSLATE_PROXY_URL || '';
-const DEBUG_MODE = import.meta.env.DEV || localStorage.getItem('debug_translator') === '1';
+type DebugLog = { type: "request" | "response" | "error"; data: string; time: string };
 
-interface DebugLog { type: 'request' | 'response' | 'error'; data: string; timestamp: string; }
+function cacheKeyFor(text: string): string {
+  // btoa падает на кириллице, поэтому кодируем в UTF-8
+  const bytes = new TextEncoder().encode(text.slice(0, 200));
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return `nv_translate_${btoa(bin)}`;
+}
 
-export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTranslate }) => {
+export const TranslateButton: React.FC<TranslateButtonProps> = ({
+  text,
+  onTranslate,
+  disabled = false,
+}) => {
+  const t = useI18n();
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [showDebug, setShowDebug] = React.useState(false);
-  const [debugLogs, setDebugLogs] = React.useState<DebugLog[]>([]);
+  const [logs, setLogs] = React.useState<DebugLog[]>([]);
 
-  const addLog = (type: DebugLog['type'], data: string) => {
-    if (!DEBUG_MODE) return;
-    setDebugLogs(prev => [...prev, { type, data, timestamp: new Date().toLocaleTimeString() }]);
-  };
+  const proxyUrl = React.useMemo(resolveProxyUrl, []);
+  const useProxy = Boolean(proxyUrl);
+
+  const log = (type: DebugLog["type"], data: string) =>
+    setLogs((prev) => [...prev, { type, data, time: new Date().toLocaleTimeString() }]);
 
   const handleTranslate = async () => {
-    if (!text || loading || text.length < 20) return;
-
-    const cacheKey = `nv_translate_${btoa(text.substring(0, 100))}`;
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) { onTranslate(cached); return; }
-
-    if (!API_KEY) {
-      const err = '[ERROR] NVIDIA API key не настроен. Добавьте секрет NVIDIA_API_KEY в GitHub Secrets';
-      console.warn(err);
-      setError(err);
+    if (!text || loading || disabled) return;
+    if (text.trim().length < 3) {
+      setError(t("Text is too short to translate"));
+      setShowDebug(true);
       return;
     }
 
-    const requestBody = {
-      model: 'nvidia/riva-translate-4b-instruct-v2',
-      messages: [{ role: 'user', content: `Translate to Russian: ${text}` }],
-      max_tokens: Math.min(text.length * 2, 4000),
-      temperature: 0.3,
-    };
-
-    const isUsingProxy = !!TRANSLATE_PROXY;
-    const apiUrl = TRANSLATE_PROXY || 'https://integrate.api.nvidia.com/v1/chat/completions';
-
-    addLog('request', JSON.stringify({ url: apiUrl, usingProxy: isUsingProxy, body: requestBody }, null, 2));
+    const cacheKey = cacheKeyFor(text);
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      onTranslate(cached);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
+    const body = useProxy
+      ? { text, target: "Russian" }
+      : {
+          model: MODEL,
+          messages: [{ role: "user", content: `Translate to Russian: ${text}` }],
+          max_tokens: Math.min(Math.max(text.length * 2, 256), 4000),
+          temperature: 0.3,
+        };
+
+    const url = useProxy ? proxyUrl : NVIDIA_URL;
+    log("request", `${url}\n${JSON.stringify(body).slice(0, 800)}`);
+
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
+      const res = await fetch(url, {
+        method: "POST",
         headers: {
-          ...(isUsingProxy ? {} : { 'Authorization': `Bearer ${API_KEY}` }),
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
+          ...(useProxy ? {} : { Authorization: `Bearer ${DIRECT_KEY}` }),
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(body),
       });
 
-      const responseText = await response.text();
-      addLog('response', `status: ${response.status}\n${responseText.substring(0, 1000)}`);
+      const raw = await res.text();
+      log("response", `HTTP ${res.status}\n${raw.slice(0, 1200)}`);
 
-      if (!response.ok) {
-        let err: any = new Error(`HTTP ${response.status}`);
-        try { const parsed = JSON.parse(responseText); err = new Error(`HTTP ${response.status}: ${parsed?.error?.message || responseText.substring(0, 200)}`); }
-        catch (e) { err = new Error(`${err.message}\n${responseText.substring(0, 200)}`); }
-        throw err;
+      let data: any = null;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        /* не JSON */
       }
 
-      const data = JSON.parse(responseText);
-      const translated = data.choices?.[0]?.message?.content?.trim() || text;
+      if (!res.ok) {
+        const msg =
+          data?.details || data?.error?.message || data?.error || raw.slice(0, 300) || `HTTP ${res.status}`;
+        throw new Error(`${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+      }
+
+      const translated: string =
+        data?.text || data?.choices?.[0]?.message?.content?.trim() || "";
+      if (!translated) throw new Error("Пустой ответ от API");
+
       sessionStorage.setItem(cacheKey, translated);
       onTranslate(translated);
-    } catch (error: any) {
-      const errMsg = error.message || 'Unknown error';
-      console.error('[TranslateButton] Ошибка:', errMsg);
-      addLog('error', errMsg);
-      setError(errMsg);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      log("error", msg);
+      setError(msg);
+      setShowDebug(true);
     } finally {
       setLoading(false);
     }
@@ -98,43 +148,106 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <Button icon={<DocumentText20Regular />} size="small" appearance="subtle" onClick={handleTranslate}
-                disabled={loading || !text || text.length < 20} title="Перевести на русский (NVI)" style={{ marginLeft: 4 }}>
-          {loading ? '...' : 'RU'}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+        <Button
+          icon={<DocumentText20Regular />}
+          size="small"
+          appearance="subtle"
+          onClick={handleTranslate}
+          disabled={loading || disabled || !text}
+          title={t("Translate to Russian")}
+        >
+          {loading ? "…" : "RU"}
         </Button>
-        {error && <span style={{ fontSize: 12, color: '#f04e4e', cursor: 'pointer' }} title={error} onClick={() => setShowDebug(true)}>⚠</span>}
-        {!API_KEY && <span style={{ fontSize: 12, color: '#f7931a', cursor: 'pointer' }} title="API ключ не настроен" onClick={() => setShowDebug(true)}>❓</span>}
+        {error && (
+          <span
+            style={{ fontSize: 12, color: "#f04e4e", cursor: "pointer" }}
+            title={error}
+            onClick={() => setShowDebug(true)}
+          >
+            ⚠
+          </span>
+        )}
       </div>
 
-      <Dialog open={showDebug} onOpenChange={(_, data) => { if (!data.open) setShowDebug(false); }}>
-        <DialogSurface><DialogBody>
-          <DialogTitle>Debug: NVIDIA Translate
-            <Button appearance="transparent" aria-label="close" onClick={() => setShowDebug(false)} style={{ float: 'right' }}>
-              <Dismiss24Regular />
-            </Button>
-          </DialogTitle>
-          <DialogContent style={{ maxHeight: '400px', overflow: 'auto', fontSize: 12 }}>
-            {!API_KEY && <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#fff5f5', borderRadius: 4 }}>
-              <strong>⚠ API Key не настроен</strong><br />
-              Добавьте секрет <code>NVIDIA_API_KEY</code> в GitHub Secrets
-            </div>}
-            {TRANSLATE_PROXY && <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#e6f7ff', borderRadius: 4 }}>
-              <strong>✅ Используется прокси:</strong><br />{TRANSLATE_PROXY}
-            </div>}
-            {!TRANSLATE_PROXY && API_KEY && <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#fffbe6', borderRadius: 4 }}>
-              <strong>⚡ Прямой запрос (нужен прокси для CORS)</strong>
-            </div>}
-            {debugLogs.length > 0 && <>
-              <strong style={{ marginBottom: 8, display: 'block' }}>Request/Response Logs:</strong>
-              <details open>{debugLogs.map((log, i) => <div key={i} style={{ backgroundColor: log.type === 'error' ? '#fff5f5' : log.type === 'response' ? '#f0f8ff' : '#fafafa', padding: 8, marginBottom: 8, borderRadius: 4, fontFamily: 'monospace', fontSize: 11 }}>
-                <span style={{ color: '#666' }}>{log.timestamp} [{log.type.toUpperCase()}]</span><br />
-                <span style={{ marginTop: 4 }}>{log.data}</span>
-              </div>)}</details>
-            </>}
-            {!error && debugLogs.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', marginTop: 12 }}>Нажмите RU для перевода...</div>}
-          </DialogContent>
-        </DialogBody></DialogSurface>
+      <Dialog
+        open={showDebug}
+        onOpenChange={(_, d) => {
+          if (!d.open) setShowDebug(false);
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>
+              NVIDIA Translate — диагностика
+              <Button
+                appearance="transparent"
+                aria-label="close"
+                onClick={() => setShowDebug(false)}
+                style={{ float: "right" }}
+              >
+                <Dismiss24Regular />
+              </Button>
+            </DialogTitle>
+            <DialogContent style={{ maxHeight: 420, overflow: "auto", fontSize: 12 }}>
+              <div style={{ marginBottom: 12, padding: 8, borderRadius: 4, background: useProxy ? "#e6f7ff" : "#fffbe6" }}>
+                <strong>{useProxy ? "✅ Режим: прокси" : "⚡ Режим: прямой запрос"}</strong>
+                <br />
+                <code style={{ wordBreak: "break-all" }}>
+                  {useProxy ? proxyUrl : NVIDIA_URL}
+                </code>
+                {!useProxy && !DIRECT_KEY && (
+                  <div style={{ color: "#c00", marginTop: 6 }}>
+                    API-ключ не задан — прямой режим не сработает.
+                  </div>
+                )}
+                <div style={{ marginTop: 6, color: "#666" }}>
+                  Сменить прокси: <code>localStorage.translate_proxy_url = "https://…"</code>
+                </div>
+              </div>
+
+              {error && (
+                <div style={{ marginBottom: 12, padding: 8, borderRadius: 4, background: "#fff5f5", color: "#a00" }}>
+                  <strong>Ошибка:</strong> {error}
+                </div>
+              )}
+
+              {logs.length > 0 && (
+                <>
+                  <strong>Логи:</strong>
+                  {logs.map((l, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        marginTop: 8,
+                        padding: 8,
+                        borderRadius: 4,
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        background:
+                          l.type === "error" ? "#fff5f5" : l.type === "response" ? "#f0f8ff" : "#fafafa",
+                      }}
+                    >
+                      <span style={{ color: "#666" }}>
+                        {l.time} [{l.type.toUpperCase()}]
+                      </span>
+                      <br />
+                      {l.data}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {!error && logs.length === 0 && (
+                <div style={{ color: "#666", fontStyle: "italic" }}>
+                  Нажмите «RU», чтобы перевести текст.
+                </div>
+              )}
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
       </Dialog>
     </>
   );

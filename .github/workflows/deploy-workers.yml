@@ -1,0 +1,33 @@
+name: Deploy Translate Proxy (Cloudflare Worker)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "workers/translate.js"
+      - "wrangler.toml"
+      - ".github/workflows/deploy-workers.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.toml --no-autoconfig
+          secrets: |
+            NVIDIA_API_KEY
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}

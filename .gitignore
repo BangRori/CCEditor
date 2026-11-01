@@ -24,3 +24,8 @@ dist-ssr
 *.sw?
 
 /scripts/spec.i18n.json
+
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+.env

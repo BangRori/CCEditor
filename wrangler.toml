@@ -1,0 +1,11 @@
+name = "cc-editor-translate"
+main = "workers/translate.js"
+compatibility_date = "2024-01-01"
+account_id = "d324971d8a4c1f9f9877e9ef6b15b1e3"
+
+# KV Namespace для кэширования (опционально)
+# [[kv_namespaces]]
+# binding = "CACHE"
+
+[vars]
+MAX_TOKENS = "4000"
