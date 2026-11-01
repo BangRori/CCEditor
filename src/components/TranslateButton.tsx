@@ -41,6 +41,9 @@ function resolveProxyUrl(): string {
 
 const DIRECT_KEY = import.meta.env.VITE_NVIDIA_API_KEY || "";
 
+/** Клиентский ключ для доступа к воркеру. */
+const CLIENT_KEY = import.meta.env.VITE_TRANSLATE_CLIENT_KEY || "";
+
 interface TranslateButtonProps {
   text: string;
   onTranslate: (translated: string) => void;
@@ -102,15 +105,22 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({
         };
 
     const url = useProxy ? proxyUrl : NVIDIA_URL;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (useProxy && CLIENT_KEY) {
+      headers["X-API-Key"] = CLIENT_KEY;
+    }
+    if (!useProxy) {
+      headers["Authorization"] = `Bearer ${DIRECT_KEY}`;
+    }
+
     log("request", `${url}\n${JSON.stringify(body).slice(0, 800)}`);
 
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(useProxy ? {} : { Authorization: `Bearer ${DIRECT_KEY}` }),
-        },
+        headers,
         body: JSON.stringify(body),
       });
 
