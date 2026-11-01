@@ -1,105 +1,106 @@
-# Настройка переводчика в CCEditor
+# Переводчик в CCEditor
 
-## Обзор
+Кнопка **RU** в полноэкранном редакторе переводит текст на русский через
+`nvidia/riva-translate-4b-instruct-v2`.
 
-Переводчик использует NVIDIA NVI API (`nvidia/riva-translate-4b-instruct-v2`) для перевода текста на русский язык. Из-за ограничений CORS на GitHub Pages требуется прокси-сервер.
+## Как это устроено
 
-## Решение: Cloudflare Workers Proxy
-
-### Шаг 1: Настройка Cloudflare аккаунта
-
-1. Создайте аккаунт на [Cloudflare](https://dash.cloudflare.com/) (если ещё нет)
-2. Установите wrangler:
-   ```bash
-   npm install -g wrangler
-   ```
-
-### Шаг 2: Авторизация
-
-```bash
-wrangler login
+```
+Браузер (GitHub Pages) → Cloudflare Worker → NVIDIA API
 ```
 
-### Шаг 3: Получение NVIDIA API ключа
+Прямой запрос к `integrate.api.nvidia.com` из браузера блокируется CORS, а ключ
+нельзя класть в публичный бандл. Поэтому запрос идёт через свой Worker, где
+ключ живёт в секретах Cloudflare.
 
-1. Перейдите на [NVIDIA NVI API](https://integrate.api.nvidia.com/)
-2. Создайте аккаунт и получите API ключ
-3. Сохраните ключ в GitHub Secrets как `NVIDIA_API_KEY`
+## Текущий деплой
 
-### Шаг 4: Деплой Workers
+| Что | Значение |
+| --- | --- |
+| Worker | `https://cc-editor-translate.roxroot.workers.dev` |
+| Код | `workers/translate.js` |
+| Конфиг | `wrangler.toml` |
+| Секрет | `NVIDIA_API_KEY` (задан в Cloudflare, не в git) |
 
-Существует два способа деплоя:
+URL вшит в `src/components/TranslateButton.tsx` как `DEFAULT_PROXY`, поэтому
+сайт работает без каких-либо GitHub Secrets. Переопределить можно:
 
-#### Способ A: Автоматический через GitHub Actions
+- build-time: `VITE_TRANSLATE_PROXY_URL=https://...` (env при сборке)
+- runtime: `localStorage.translate_proxy_url = "https://..."`
 
-1. Добавьте секреты в репозиторий:
-   - `CLOUDFLARE_API_TOKEN` - токен API Cloudflare (с правами на Workers)
-   - `NVIDIA_API_KEY` - ваш NVIDIA API ключ
+## Обновить / переехать
 
-2. Синхронизация URL прокси:
-   После первого успешного деплоя Workers, скопируйте URL из логов и добавьте его как секрет `VITE_TRANSLATE_PROXY_URL` в формате:
-   ```
-   https://cc-editor-translate.<ваш_аккаунт>.workers.dev
-   ```
-
-#### Способ B: Ручной деплой
+Передеплой воркера после правок `workers/translate.js`:
 
 ```bash
-cd /путь/к/CCEditor
-wrangler kv:namespace create CACHE  # (опционально для кэширования)
-wrangler secret put NVIDIA_API_KEY
-wrangler deploy
+cd CCEditor
+wrangler deploy -c wrangler.toml --no-autoconfig
 ```
 
-### Шаг 5: Обновление сайта
+Заменить ключ NVIDIA:
 
-После установки `VITE_TRANSLATE_PROXY_URL` в GitHub Secrets, следующий деплой сайта будет использовать прокси.
+```bash
+wrangler secret put NVIDIA_API_KEY --name cc-editor-translate
+```
 
-## Как это работает
+Проверка живости:
 
-1. При нажатии кнопки "RU" в FullscreenEditor отправляется POST-запрос на ваш Cloudflare Worker
-2. Worker добавляет заголовок авторизации и форвардит запрос на NVIDIA API
-3. Ответ возвращается через CORS-заголовки, разрешающие доступ с любого домена
-4. Переведённый текст подставляется в редактор
+```bash
+curl https://cc-editor-translate.roxroot.workers.dev/health
+# {"status":"ok","key_configured":true,...}
+```
 
-## Тестирование
+Проверка перевода:
 
-После настройки:
+```bash
+curl -X POST https://cc-editor-translate.roxroot.workers.dev/ \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello world"}'
+```
 
-1. Откройте CCEditor
-2. Войдите в fullscreen редактор (кнопка полноэкранного режима)
-3. Введите текст длиннее 20 символов
-4. Нажмите кнопку "RU"
-5. Текст должен перевестись на русский
+## API воркера
 
-## Решение проблем
-
-### CORS ошибка
-- Убедитесь, что Workers развернут и доступен по URL
-- Проверьте, что `VITE_TRANSLATE_PROXY_URL` установлен в секретах GitHub
-
-### 401 Unauthorized
-- Проверьте, что `NVIDIA_API_KEY` правильно настроен
-- Убедитесь, что ключ активен (не истёк срок действия)
-
-### Таймаут запроса
-- NVIDIA API может занимать до 10-30 секунд
-- Попробуйте укоротить текст для теста
+- `GET /health` — статус, `key_configured`
+- `POST /` или `POST /translate` — body `{ "text": "...", "target": "Russian" }`
+  (target опционален). Ответ: стандартный ответ OpenAI-совместимого API плюс
+  удобное поле `text` с готовым переводом.
+- Ошибки: `400` нет текста, `500`/`NO_KEY` секрет не задан, `502` NVIDIA
+  отказал (в `details` — причина, например `Unauthorized access`).
 
 ## Локальная разработка
 
-Для локальной разработки можно использовать:
+```bash
+# вариант 1: локальный воркер
+wrangler dev -c wrangler.toml --no-autoconfig --port 8787
+# затем в браузере: localStorage.translate_proxy_url = "http://localhost:8787"
 
-1. **wrangler dev**:
-   ```bash
-   wrangler dev
-   ```
-   Затем в `.env` добавить:
-   ```
-   VITE_TRANSLATE_PROXY_URL=http://localhost:8787
-   ```
+# вариант 2: прямой запрос мимо воркера (ключ попадёт в дев-бандл!)
+# .env.local:
+#   VITE_TRANSLATE_PROXY_URL=
+#   VITE_NVIDIA_API_KEY=nvapi-...
+```
 
-2. **Прямой запрос** (только с localhost):
-   ```
-   VITE_NVIDIA_API_KEY=your-key
-   ```
+## Автодеплой воркера из GitHub Actions
+
+`.github/workflows/deploy-workers.yml` срабатывает на изменения
+`workers/translate.js` / `wrangler.toml`. Нужны секреты репозитория:
+
+- `CLOUDFLARE_API_TOKEN` — токен с правами Workers
+- `CLOUDFLARE_ACCOUNT_ID` — ID аккаунта
+- `NVIDIA_API_KEY` — ключ NVIDIA
+
+Если `CLOUDFLARE_API_TOKEN` не задан, шаг просто пропускается (без красного
+крестика), а воркер обновляется вручную командой `wrangler deploy`.
+
+## Отладка
+
+Ошибка видна по значку ⚠ рядом с кнопкой — он открывает диалог с режимом,
+URL, телом запроса и ответом. Кэш переводов — в `sessionStorage`
+(`nv_translate_*`), сбросить: `sessionStorage.clear()`.
+
+## Безопасность
+
+Сайт публичный, поэтому URL воркера виден всем, и любой может им пользоваться
+(тратя лимиты NVIDIA). Origin-проверка тут не спасёт — `curl` её обходит.
+Если начнётся злоупотребление: удалить воркер (`wrangler delete`), поставить
+жёсткий лимит запросов или добавить общий токен в воркер и в бандл.
