@@ -1,12 +1,15 @@
 /**
  * Компонент кнопки перевода текста
  * Использует NVIDIA NVI API (nvidia/riva-translate-4b-instruct-v2)
- * API ключ должен быть передан через VITE_NVIDIA_API_KEY (GitHub secret)
  * 
  * Интеграция:
- * 1. Добавьте секрет NVIDIA_API_KEY в Settings → Secrets → Actions
- * 2. Убедитесь, что deploy.yml передаёт VITE_NVIDIA_API_KEY
- * 3. Вставьте <TranslateButton text={value} onTranslate={setValue} /> рядом с полем
+ * 1. Добавьте секрет NVIDIA_API_KEY в GitHub Secrets (Settings → Secrets & variables → Actions)
+ * 2. ИЛИ настройте прокси (см. инструкции ниже)
+ * 
+ * Прокси-серверы (рекомендуется для GitHub Pages):
+ * - CloudFlare Workers: создайте workers/translate.js
+ * - Netlify Functions: netlify/functions/translate.ts
+ * - Vercel: api/translate/route.ts
  */
 
 import * as React from 'react';
@@ -18,7 +21,11 @@ interface TranslateButtonProps {
   onTranslate: (translated: string) => void;
 }
 
+// API ключ берётся из секрета NVIDIA_API_KEY (будет подставлен во время сборки)
 const API_KEY = import.meta.env.VITE_NVIDIA_API_KEY || '';
+
+// URL прокси (можно задать через VITE_TRANSLATE_PROXY_URL)
+const PROXY_URL = import.meta.env.VITE_TRANSLATE_PROXY_URL || '';
 
 // Кеш в sessionStorage
 const translateCache: Record<string, string> = {};
@@ -37,6 +44,9 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
   const [error, setError] = React.useState<string | null>(null);
   const [showDebug, setShowDebug] = React.useState(false);
   const [debugLogs, setDebugLogs] = React.useState<DebugLog[]>([]);
+  
+  // Приоритет: Proxy URL > Direct API (с CORS проблемой)
+  const API_URL = PROXY_URL || 'https://integrate.api.nvidia.com/v1/chat/completions';
 
   const addLog = (type: DebugLog['type'], data: string) => {
     if (!DEBUG_MODE) return;
@@ -57,13 +67,7 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
       return;
     }
 
-    if (!API_KEY) {
-      const err = '[ERROR] NVIDIA API key не настроен. Добавьте секрет NVIDIA_API_KEY в GitHub.';
-      console.warn(err);
-      setError(err);
-      return;
-    }
-
+    const isUsingProxy = !!PROXY_URL;
     const requestBody = {
       model: 'nvidia/riva-translate-4b-instruct-v2',
       messages: [{ role: 'user', content: `Translate to Russian: ${text}` }],
@@ -71,42 +75,67 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
       temperature: 0.3,
     };
 
-    addLog('request', JSON.stringify(requestBody, null, 2));
+    // Development fallback: CORS proxy for GitHub Pages
+    const url = isUsingProxy 
+      ? PROXY_URL 
+      : API_URL;
+
+    // На GitHub Pages без прокси используем corsproxy.io (работает, но медленно)
+    const finalUrl = (API_KEY && !isUsingProxy) && window.location.hostname.includes('github.io')
+      ? 'https://corsproxy.io/?' + encodeURIComponent(API_URL)
+      : url;
+
+    addLog('request', JSON.stringify({
+      url: finalUrl.includes('corsproxy') ? 'CORS-PROXY (development)' : url,
+      body: requestBody,
+      headers: isUsingProxy ? { 'Content-Type': 'application/json' } : { 
+        'Authorization': `Bearer ${API_KEY ? '[KEY HIDDEN]' : 'MISSING' }`,
+        'Content-Type': 'application/json'
+      }
+    }, null, 2));
 
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      const response = await fetch(finalUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${API_KEY}`,
+          ...(isUsingProxy ? {} : { 'Authorization': `Bearer ${API_KEY}` }),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
       });
 
       const responseText = await response.text();
-      addLog('response', `status: ${response.status}\n${responseText}`);
+      addLog('response', `status: ${response.status}\n${responseText.substring(0, 1000)}`);
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${responseText}`);
+        let err: any = new Error(`HTTP ${response.status}`);
+        try {
+          const parsed = JSON.parse(responseText);
+          err = new Error(`HTTP ${response.status}: ${parsed?.error?.message || responseText.substring(0, 200)}`);
+        } catch (e) {
+          err = new Error(`${err.message}\n${responseText.substring(0, 200)}`);
+        }
+        throw err;
       }
 
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        throw new Error(`Invalid JSON response: ${responseText.substring(0, 500)}`);
-      }
-
+      const data = JSON.parse(responseText);
       const translated = data.choices?.[0]?.message?.content?.trim() || text;
+      
       sessionStorage.setItem(cacheKey, translated);
       onTranslate(translated);
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    } catch (error: any) {
+      const errMsg = error.message || 'Unknown error';
       console.error('[TranslateButton] Ошибка:', errMsg);
-      setError(errMsg);
+      addLog('error', errMsg);
+      
+      if (errMsg.includes('CORS') || errMsg.includes('Failed to fetch')) {
+        setError('CORS блокирует запрос. Используется corsproxy.io для разработки.');
+      } else {
+        setError(errMsg);
+      }
     } finally {
       setLoading(false);
     }
@@ -133,7 +162,7 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
             ⚠
           </span>
         )}
-        {API_KEY === '' && (
+        {!API_KEY && (
           <span style={{ fontSize: 12, color: '#f7931a', cursor: 'pointer' }} 
                 title="API ключ не настроен" 
                 onClick={() => setShowDebug(true)}>
@@ -152,7 +181,7 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
               </Button>
             </DialogTitle>
             <DialogContent style={{ maxHeight: '400px', overflow: 'auto', fontSize: 12 }}>
-              {API_KEY === '' && (
+              {!API_KEY && (
                 <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#fff5f5', borderRadius: 4 }}>
                   <strong>⚠ API Key не настроен</strong>
                   <br />
@@ -168,32 +197,52 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
                   Включить подробный дебаг
                 </Button>
               )}
+              
+              {PROXY_URL ? (
+                <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#e6f7ff', borderRadius: 4 }}>
+                  <strong>✅ Используется прокси:</strong><br />
+                  {PROXY_URL}
+                </div>
+              ) : API_KEY && !error?.includes('CORS') && (
+                <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#fffbe6', borderRadius: 4 }}>
+                  <strong>⚡ Прямой запрос (может не работать на GitHub Pages из-за CORS)</strong>
+                  <br />
+                  Настройте VITE_TRANSLATE_PROXY_URL для обхода CORS
+                </div>
+              )}
+              
+              {error?.includes('CORS') && (
+                <div style={{ marginBottom: 12, padding: 8, backgroundColor: '#fff5f5', borderRadius: 4, color: '#cc0000' }}>
+                  <strong>❌ CORS ошибка:</strong><br />
+                  Прямой запрос к NVIDIA API блокируется браузером.<br />
+                  Настройте прокси сервер или включите CloudFlare Workers.
+                </div>
+              )}
+              
               {debugLogs.length > 0 && (
                 <>
                   <strong style={{ marginBottom: 8, display: 'block' }}>Request/Response Logs:</strong>
-                  {debugLogs.map((log, i) => (
-                    <div key={i} style={{ 
-                      backgroundColor: log.type === 'error' ? '#fff5f5' : log.type === 'response' ? '#f0f8ff' : '#fafafa',
-                      padding: 8,
-                      marginBottom: 8,
-                      borderRadius: 4,
-                      fontFamily: 'monospace',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      fontSize: 11
-                    }}>
-                      <span style={{ color: '#666' }}>{log.timestamp}</span>
-                      <br />
-                      <span style={{ marginTop: 4 }}>{log.data}</span>
-                    </div>
-                  ))}
+                  <details open>
+                    {debugLogs.map((log, i) => (
+                      <div key={i} style={{ 
+                        backgroundColor: log.type === 'error' ? '#fff5f5' : log.type === 'response' ? '#f0f8ff' : '#fafafa',
+                        padding: 8,
+                        marginBottom: 8,
+                        borderRadius: 4,
+                        fontFamily: 'monospace',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        fontSize: 11
+                      }}>
+                        <span style={{ color: '#666' }}>{log.timestamp} [{log.type.toUpperCase()}]</span>
+                        <br />
+                        <span style={{ marginTop: 4 }}>{log.data}</span>
+                      </div>
+                    ))}
+                  </details>
                 </>
               )}
-              {error && error.includes('Failed to fetch') && (
-                <div style={{ color: '#f04e4e', marginTop: 12, padding: 8, backgroundColor: '#fff5f5', borderRadius: 4 }}>
-                  <strong>Ошибка сети:</strong> CORS или нет подключения к интернету
-                </div>
-              )}
+              
               {!error && debugLogs.length === 0 && (
                 <div style={{ color: '#666', fontStyle: 'italic', marginTop: 12 }}>
                   Нажмите кнопку RU для перевода...
@@ -205,10 +254,4 @@ export const TranslateButton: React.FC<TranslateButtonProps> = ({ text, onTransl
       </Dialog>
     </>
   );
-};
-
-// Экспорт для включения дебага вручную
-export const enableDebugTranslator = () => {
-  localStorage.setItem('debug_translator', '1');
-  window.location.reload();
 };
