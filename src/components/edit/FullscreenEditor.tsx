@@ -20,6 +20,7 @@ import type { editor } from "monaco-editor";
 import { useI18n } from "../../tools/i18n";
 import { encodeToTokens } from "../../tools/tokenizer";
 import { useFullscreenEditor } from "./useFullscreenEditor";
+import { TranslateButton } from "../TranslateButton";
 
 interface FullscreenEditorProps {
   window_title?: string;
@@ -203,6 +204,8 @@ $\{7:${t("other settings")}}
               >
                 {t("apply")}
               </Button>
+              {/* Кнопка перевода на русский (через NVIDIA NVI) */}
+              <TranslateButton text={editorValue} onTranslate={setEditorValue} />
             </DialogActions>
           </DialogBody>
         </DialogSurface>
